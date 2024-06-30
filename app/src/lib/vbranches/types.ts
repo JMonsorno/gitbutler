@@ -2,8 +2,9 @@ import 'reflect-metadata';
 import { splitMessage } from '$lib/utils/commitMessage';
 import { hashCode } from '$lib/utils/string';
 import { isDefined, notNull } from '$lib/utils/typeguards';
-import { convertRemoteToWebUrl } from '$lib/utils/url';
+import { ipv4Regex } from '$lib/utils/url';
 import { Type, Transform } from 'class-transformer';
+import GitUrlParse from 'git-url-parse';
 
 export type ChangeType =
 	/// Entry does not exist in old version
@@ -370,12 +371,20 @@ export class RemoteBranchData {
 	}
 }
 
+export enum Forge {
+	Unknown,
+	GitHub,
+	GitLab,
+	Bitbucket,
+	AzureDevOps
+}
+
+export type ForgeType = keyof typeof Forge;
+
 export class BaseBranch {
 	branchName!: string;
 	remoteName!: string;
-	remoteUrl!: string;
 	pushRemoteName!: string;
-	pushRemoteUrl!: string;
 	baseSha!: string;
 	currentSha!: string;
 	behind!: number;
@@ -384,6 +393,41 @@ export class BaseBranch {
 	@Type(() => RemoteCommit)
 	recentCommits!: RemoteCommit[];
 	lastFetchedMs?: number;
+	forgeType!: ForgeType;
+	private _remoteUrl!: string;
+	private repoBaseUrl!: string;
+	private gitPushRemote!: GitUrlParse.GitUrl | undefined;
+
+	get remoteUrl(): string {
+		return this._remoteUrl;
+	}
+
+	set remoteUrl(value: string) {
+		this._remoteUrl = value;
+		const gitRemote = GitUrlParse(value);
+		const protocol = ipv4Regex.test(gitRemote.resource) ? 'http' : 'https';
+		this.repoBaseUrl = `${protocol}://${gitRemote.resource}/${gitRemote.owner}/${gitRemote.name}`;
+		this.forgeType = this.getForgeType(gitRemote.resource);
+	}
+
+	set pushRemoteUrl(value: string) {
+		this.gitPushRemote = value ? GitUrlParse(value) : undefined;
+	}
+
+	getForgeType(repoBaseUrl: string): ForgeType {
+		switch (true) {
+			case repoBaseUrl.includes('github.com'):
+				return 'GitHub';
+			case repoBaseUrl.includes('gitlab.com'):
+				return 'GitLab';
+			case repoBaseUrl.includes('bitbucket.org'):
+				return 'Bitbucket';
+			case repoBaseUrl.includes('dev.azure.com'):
+				return 'AzureDevOps';
+			default:
+				return 'Unknown';
+		}
+	}
 
 	actualPushRemoteName(): string {
 		return this.pushRemoteName || this.remoteName;
@@ -393,71 +437,74 @@ export class BaseBranch {
 		return this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
 	}
 
-	get pushRepoBaseUrl(): string {
-		return convertRemoteToWebUrl(this.pushRemoteUrl);
-	}
+	get commitBaseUrl(): string | undefined {
+		if (!this.gitPushRemote) {
+			return undefined;
+		}
 
-	get repoBaseUrl(): string {
-		return convertRemoteToWebUrl(this.remoteUrl);
+		const { organization, owner, name, protocol } = this.gitPushRemote;
+		let { resource } = this.gitPushRemote;
+		const webProtocol = ipv4Regex.test(resource) ? 'http' : 'https';
+
+		if (protocol === 'ssh' && resource.startsWith('ssh.')) {
+			resource = resource.slice(4);
+		}
+
+		if (this.forgeType === 'AzureDevOps') {
+			return `${webProtocol}://${resource}/${organization}/${owner}/_git/${name}`;
+		} else {
+			return `${webProtocol}://${resource}/${owner}/${name}`;
+		}
 	}
 
 	commitUrl(commitId: string): string | undefined {
+		if (!this.commitBaseUrl) {
+			return undefined;
+		}
+
 		// Different Git providers use different paths for the commit url:
-		if (this.isBitBucket) {
-			return `${this.pushRepoBaseUrl}/commits/${commitId}`;
+		switch (this.forgeType) {
+			case 'Bitbucket':
+				return `${this.commitBaseUrl}/commits/${commitId}`;
+			case 'GitLab':
+				return `${this.commitBaseUrl}/-/commit/${commitId}`;
+			case 'AzureDevOps':
+			case 'GitHub':
+			case 'Unknown':
+			default:
+				return `${this.commitBaseUrl}/commit/${commitId}`;
 		}
-		if (this.isGitlab) {
-			return `${this.pushRepoBaseUrl}/-/commit/${commitId}`;
-		}
-		return `${this.pushRepoBaseUrl}/commit/${commitId}`;
 	}
 
-	get shortName() {
+	get shortName(): string {
 		return this.branchName.split('/').slice(-1)[0];
 	}
 
-	branchUrl(upstreamBranchName: string | undefined) {
-		if (!upstreamBranchName) return undefined;
+	branchUrl(upstreamBranchName: string | undefined): string | undefined {
+		if (!upstreamBranchName || !this.gitPushRemote) return undefined;
 		const baseBranchName = this.branchName.split('/')[1];
 		const branchName = upstreamBranchName.split('/').slice(3).join('/');
 
 		if (this.pushRemoteName) {
-			if (this.isGitHub) {
+			if (this.forgeType === 'GitHub') {
 				// master...schacon:docs:Virtual-branch
-				const pushUsername = this.extractUsernameFromGitHubUrl(this.pushRemoteUrl);
-				const pushRepoName = this.extractRepoNameFromGitHubUrl(this.pushRemoteUrl);
+				const pushUsername = this.gitPushRemote.user;
+				const pushRepoName = this.gitPushRemote.name;
 				return `${this.repoBaseUrl}/compare/${baseBranchName}...${pushUsername}:${pushRepoName}:${branchName}`;
 			}
 		}
 
-		if (this.isBitBucket) {
-			return `${this.repoBaseUrl}/branch/${branchName}?dest=${baseBranchName}`;
+		switch (this.forgeType) {
+			case 'Bitbucket':
+				return `${this.repoBaseUrl}/branch/${branchName}?dest=${baseBranchName}`;
+			case 'AzureDevOps':
+				return `${this.commitBaseUrl}/branchCompare?baseVersion=GB${baseBranchName}&targetVersion=GB${branchName}`;
+			// The following branch path is good for at least Gitlab and Github:
+			case 'GitHub':
+			case 'GitLab':
+			case 'Unknown':
+			default:
+				return `${this.repoBaseUrl}/compare/${baseBranchName}...${branchName}`;
 		}
-		// The following branch path is good for at least Gitlab and Github:
-		return `${this.repoBaseUrl}/compare/${baseBranchName}...${branchName}`;
-	}
-
-	private extractUsernameFromGitHubUrl(url: string): string | null {
-		const regex = /github\.com[/:]([a-zA-Z0-9_-]+)\/.*/;
-		const match = url.match(regex);
-		return match ? match[1] : null;
-	}
-
-	private extractRepoNameFromGitHubUrl(url: string): string | null {
-		const regex = /github\.com[/:]([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)/;
-		const match = url.match(regex);
-		return match ? match[2] : null;
-	}
-
-	private get isGitHub(): boolean {
-		return this.repoBaseUrl.includes('github.com');
-	}
-
-	private get isBitBucket(): boolean {
-		return this.repoBaseUrl.includes('bitbucket.org');
-	}
-
-	private get isGitlab(): boolean {
-		return this.repoBaseUrl.includes('gitlab.com');
 	}
 }
