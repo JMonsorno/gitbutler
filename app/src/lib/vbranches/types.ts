@@ -400,22 +400,17 @@ export class BaseBranch {
 	@Transform(({ value }: TransformFnParams) => (value ? GitUrlParse(value) : undefined))
 	gitPushRemote!: GitUrlParse.GitUrl | undefined;
 	commitBaseUrl: string | undefined;
-	shortName: string | undefined;
-	lastFetched: Date | undefined;
 	actualPushRemoteName: string | undefined;
 	private generateCommitUrl: ((commitId: string) => string) | undefined;
 	private generateBranchUrl: ((baseBranchName: string, branchName: string) => string) | undefined;
 
+	// TODO: Move most if not all of this to Rust to send over finalized properties from get_base_branch_data
 	// Make as many of the one-time business rules run once
 	afterTransform(): void {
 		const gitRemote = GitUrlParse(this.remoteUrl);
 		const remoteUrlProtocol = ipv4Regex.test(gitRemote.resource) ? 'http' : 'https';
 		this.repoBaseUrl = `${remoteUrlProtocol}://${gitRemote.resource}/${gitRemote.owner}/${gitRemote.name}`;
 		this.forgeType = this.getForgeType(gitRemote.resource);
-
-		this.shortName = this.branchName?.split('/').slice(-1)[0];
-
-		this.lastFetched = this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
 
 		this.actualPushRemoteName = this.pushRemoteName || this.remoteName;
 
@@ -499,9 +494,17 @@ export class BaseBranch {
 				return 'Unknown';
 		}
 	}
+	
+	get lastFetched(): Date | undefined {
+		return this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
+	}
 
 	commitUrl(commitId: string): string | undefined {
 		return this.generateCommitUrl ? this.generateCommitUrl(commitId) : undefined;
+	}
+
+	get shortName() {
+		return this.branchName.split('/').slice(-1)[0];
 	}
 
 	branchUrl(upstreamBranchName: string | undefined): string | undefined {
