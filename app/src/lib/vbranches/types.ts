@@ -3,7 +3,7 @@ import { splitMessage } from '$lib/utils/commitMessage';
 import { hashCode } from '$lib/utils/string';
 import { isDefined, notNull } from '$lib/utils/typeguards';
 import { ipv4Regex } from '$lib/utils/url';
-import { Type, Transform } from 'class-transformer';
+import { Expose, Type, Transform, TransformFnParams } from 'class-transformer';
 import GitUrlParse from 'git-url-parse';
 
 export type ChangeType =
@@ -393,28 +393,99 @@ export class BaseBranch {
 	@Type(() => RemoteCommit)
 	recentCommits!: RemoteCommit[];
 	lastFetchedMs?: number;
-	forgeType!: ForgeType;
-	private _remoteUrl!: string;
-	private repoBaseUrl!: string;
-	private gitPushRemote!: GitUrlParse.GitUrl | undefined;
+	forgeType: ForgeType | undefined;
+	remoteUrl!: string;
+	repoBaseUrl: string | undefined;
+	@Expose({ name: 'pushRemoteUrl' })
+	@Transform(({ value }: TransformFnParams) => (value ? GitUrlParse(value) : undefined))
+	gitPushRemote!: GitUrlParse.GitUrl | undefined;
+	commitBaseUrl: string | undefined;
+	shortName: string | undefined;
+	lastFetched: Date | undefined;
+	actualPushRemoteName: string | undefined;
+	private generateCommitUrl: ((commitId: string) => string) | undefined;
+	private generateBranchUrl: ((baseBranchName: string, branchName: string) => string) | undefined;
 
-	get remoteUrl(): string {
-		return this._remoteUrl;
-	}
-
-	set remoteUrl(value: string) {
-		this._remoteUrl = value;
-		const gitRemote = GitUrlParse(value);
-		const protocol = ipv4Regex.test(gitRemote.resource) ? 'http' : 'https';
-		this.repoBaseUrl = `${protocol}://${gitRemote.resource}/${gitRemote.owner}/${gitRemote.name}`;
+	// Make as many of the one-time business rules run once
+	afterTransform(): void {
+		const gitRemote = GitUrlParse(this.remoteUrl);
+		const remoteUrlProtocol = ipv4Regex.test(gitRemote.resource) ? 'http' : 'https';
+		this.repoBaseUrl = `${remoteUrlProtocol}://${gitRemote.resource}/${gitRemote.owner}/${gitRemote.name}`;
 		this.forgeType = this.getForgeType(gitRemote.resource);
+
+		this.shortName = this.branchName?.split('/').slice(-1)[0];
+
+		this.lastFetched = this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
+
+		this.actualPushRemoteName = this.pushRemoteName || this.remoteName;
+
+		if (this.gitPushRemote) {
+			const { organization, owner, name, protocol } = this.gitPushRemote;
+			let { resource } = this.gitPushRemote;
+			const webProtocol = ipv4Regex.test(resource) ? 'http' : 'https';
+
+			if (protocol === 'ssh' && resource.startsWith('ssh.')) {
+				resource = resource.slice(4);
+			}
+
+			if (this.forgeType === 'AzureDevOps') {
+				this.commitBaseUrl = `${webProtocol}://${resource}/${organization}/${owner}/_git/${name}`;
+			} else {
+				this.commitBaseUrl = `${webProtocol}://${resource}/${owner}/${name}`;
+			}
+
+			// Different Git providers use different paths for the commit url:
+			switch (this.forgeType) {
+				case 'Bitbucket':
+					this.generateCommitUrl = (commitId) => `${this.commitBaseUrl}/commits/${commitId}`;
+					break;
+				case 'GitLab':
+					this.generateCommitUrl = (commitId) => `${this.commitBaseUrl}/-/commit/${commitId}`;
+					break;
+				case 'AzureDevOps':
+				case 'GitHub':
+				case 'Unknown':
+				default:
+					this.generateCommitUrl = (commitId) => `${this.commitBaseUrl}/commit/${commitId}`;
+					break;
+			}
+		}
+
+		if (this.gitPushRemote) {
+			if (this.pushRemoteName) {
+				if (this.forgeType === 'GitHub') {
+					// master...schacon:docs:Virtual-branch
+					const pushUsername = this.gitPushRemote.user;
+					const pushRepoName = this.gitPushRemote.name;
+					this.generateBranchUrl = (baseBranchName, branchName) =>
+						`${this.repoBaseUrl}/compare/${baseBranchName}...${pushUsername}:${pushRepoName}:${branchName}`;
+				}
+			}
+
+			if (!this.generateBranchUrl) {
+				switch (this.forgeType) {
+					case 'Bitbucket':
+						this.generateBranchUrl = (baseBranchName, branchName) =>
+							`${this.repoBaseUrl}/branch/${branchName}?dest=${baseBranchName}`;
+						break;
+					case 'AzureDevOps':
+						this.generateBranchUrl = (baseBranchName, branchName) =>
+							`${this.commitBaseUrl}/branchCompare?baseVersion=GB${baseBranchName}&targetVersion=GB${branchName}`;
+						break;
+					// The following branch path is good for at least Gitlab and Github:
+					case 'GitHub':
+					case 'GitLab':
+					case 'Unknown':
+					default:
+						this.generateBranchUrl = (baseBranchName, branchName) =>
+							`${this.repoBaseUrl}/compare/${baseBranchName}...${branchName}`;
+						break;
+				}
+			}
+		}
 	}
 
-	set pushRemoteUrl(value: string) {
-		this.gitPushRemote = value ? GitUrlParse(value) : undefined;
-	}
-
-	getForgeType(repoBaseUrl: string): ForgeType {
+	private getForgeType(repoBaseUrl: string): ForgeType {
 		switch (true) {
 			case repoBaseUrl.includes('github.com'):
 				return 'GitHub';
@@ -429,82 +500,16 @@ export class BaseBranch {
 		}
 	}
 
-	actualPushRemoteName(): string {
-		return this.pushRemoteName || this.remoteName;
-	}
-
-	get lastFetched(): Date | undefined {
-		return this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
-	}
-
-	get commitBaseUrl(): string | undefined {
-		if (!this.gitPushRemote) {
-			return undefined;
-		}
-
-		const { organization, owner, name, protocol } = this.gitPushRemote;
-		let { resource } = this.gitPushRemote;
-		const webProtocol = ipv4Regex.test(resource) ? 'http' : 'https';
-
-		if (protocol === 'ssh' && resource.startsWith('ssh.')) {
-			resource = resource.slice(4);
-		}
-
-		if (this.forgeType === 'AzureDevOps') {
-			return `${webProtocol}://${resource}/${organization}/${owner}/_git/${name}`;
-		} else {
-			return `${webProtocol}://${resource}/${owner}/${name}`;
-		}
-	}
-
 	commitUrl(commitId: string): string | undefined {
-		if (!this.commitBaseUrl) {
-			return undefined;
-		}
-
-		// Different Git providers use different paths for the commit url:
-		switch (this.forgeType) {
-			case 'Bitbucket':
-				return `${this.commitBaseUrl}/commits/${commitId}`;
-			case 'GitLab':
-				return `${this.commitBaseUrl}/-/commit/${commitId}`;
-			case 'AzureDevOps':
-			case 'GitHub':
-			case 'Unknown':
-			default:
-				return `${this.commitBaseUrl}/commit/${commitId}`;
-		}
-	}
-
-	get shortName(): string {
-		return this.branchName.split('/').slice(-1)[0];
+		return this.generateCommitUrl ? this.generateCommitUrl(commitId) : undefined;
 	}
 
 	branchUrl(upstreamBranchName: string | undefined): string | undefined {
-		if (!upstreamBranchName || !this.gitPushRemote) return undefined;
+		if (!upstreamBranchName || !this.gitPushRemote || !this.generateBranchUrl) return undefined;
+		// parameter and variable property, always calculate unless future memoization
 		const baseBranchName = this.branchName.split('/')[1];
 		const branchName = upstreamBranchName.split('/').slice(3).join('/');
 
-		if (this.pushRemoteName) {
-			if (this.forgeType === 'GitHub') {
-				// master...schacon:docs:Virtual-branch
-				const pushUsername = this.gitPushRemote.user;
-				const pushRepoName = this.gitPushRemote.name;
-				return `${this.repoBaseUrl}/compare/${baseBranchName}...${pushUsername}:${pushRepoName}:${branchName}`;
-			}
-		}
-
-		switch (this.forgeType) {
-			case 'Bitbucket':
-				return `${this.repoBaseUrl}/branch/${branchName}?dest=${baseBranchName}`;
-			case 'AzureDevOps':
-				return `${this.commitBaseUrl}/branchCompare?baseVersion=GB${baseBranchName}&targetVersion=GB${branchName}`;
-			// The following branch path is good for at least Gitlab and Github:
-			case 'GitHub':
-			case 'GitLab':
-			case 'Unknown':
-			default:
-				return `${this.repoBaseUrl}/compare/${baseBranchName}...${branchName}`;
-		}
+		return this.generateBranchUrl(baseBranchName, branchName);
 	}
 }

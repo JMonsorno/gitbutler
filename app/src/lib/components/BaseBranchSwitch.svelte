@@ -20,7 +20,7 @@
 	let project = getContext(Project);
 
 	let selectedBranch = { name: $baseBranch.branchName };
-	let selectedRemote = { name: $baseBranch.actualPushRemoteName() };
+	let selectedRemote = { name: $baseBranch.actualPushRemoteName };
 	let targetChangeDisabled = false;
 
 	if ($activeBranches) {
@@ -94,7 +94,7 @@
 						bind:value={selectedRemote}
 						itemId="name"
 						labelId="name"
-						selectedItemId={$baseBranch.actualPushRemoteName()}
+						selectedItemId={$baseBranch.actualPushRemoteName}
 						disabled={targetChangeDisabled}
 						label="Create branches on remote"
 					>
@@ -129,7 +129,7 @@
 						id="set-base-branch"
 						loading={isSwitching}
 						disabled={(selectedBranch.name === $baseBranch.branchName &&
-							selectedRemote.name === $baseBranch.actualPushRemoteName()) ||
+							selectedRemote.name === $baseBranch.actualPushRemoteName) ||
 							targetChangeDisabled}
 					>
 						{isSwitching ? 'Switching branches...' : 'Update configuration'}

@@ -104,7 +104,13 @@ export class BaseBranchService {
 }
 
 async function getBaseBranch(params: { projectId: string }): Promise<BaseBranch | null> {
-	return plainToInstance(BaseBranch, await invoke<any>('get_base_branch_data', params));
+	return createBaseBranch(await invoke<any>('get_base_branch_data', params));
+}
+
+export function createBaseBranch(obj: any): BaseBranch {
+	const baseBranch = plainToInstance(BaseBranch, obj) as BaseBranch;
+	baseBranch.afterTransform();
+	return baseBranch;
 }
 
 export async function getRemoteBranches(projectId: string | undefined) {

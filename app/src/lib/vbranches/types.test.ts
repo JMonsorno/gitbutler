@@ -1,5 +1,5 @@
+import { createBaseBranch } from './baseBranch';
 import { BaseBranch, type ForgeType } from './types';
-import { plainToInstance } from 'class-transformer';
 import { expect, test, describe } from 'vitest';
 
 const forgeTestUrls: Record<ForgeType, Array<string>> = {
@@ -31,7 +31,7 @@ describe.concurrent('BaseBranch', () => {
 			});
 
 			test.each(forgeTestUrls[forgeKey])('%s', (remoteUrl: string) => {
-				const baseBranch: BaseBranch = plainToInstance(BaseBranch, {
+				const baseBranch: BaseBranch = createBaseBranch({
 					remoteUrl: remoteUrl
 				});
 
@@ -43,7 +43,7 @@ describe.concurrent('BaseBranch', () => {
 	// The BranchService and get_base_branch_data inside of Rust should validate that this is always supplied but the
 	// previous typescript/svelte implementation supported this not being supplied so this one does as well
 	test("no pushRemoteUrl, doesn't throw", () => {
-		const baseBranch: BaseBranch = plainToInstance(BaseBranch, {
+		const baseBranch: BaseBranch = createBaseBranch({
 			remoteUrl: 'https://github.com/org/repo.git',
 			pushRemoteUrl: undefined
 		});
@@ -52,12 +52,47 @@ describe.concurrent('BaseBranch', () => {
 
 	test('it should handle complete ssh url with ip', () => {
 		const remoteUrl = 'ssh://git@192.168.1.1:22/org/repo.git';
-		const baseBranch: BaseBranch = plainToInstance(BaseBranch, {
+		const baseBranch: BaseBranch = createBaseBranch({
 			remoteUrl: remoteUrl,
 			pushRemoteUrl: remoteUrl
 		});
 		expect(baseBranch.commitBaseUrl).toEqual('http://192.168.1.1/org/repo');
 	});
+
+	describe.each(Object.keys(forgeTestUrls))(
+		'parse %s for commit base url',
+		(forgeKey: ForgeType) => {
+			test('test collection not empty', () => {
+				expect(forgeTestUrls[forgeKey]).toBeTruthy();
+				expect(forgeTestUrls[forgeKey].length).not.toBe(0);
+			});
+
+			test.each(forgeTestUrls[forgeKey])('%s', (remoteUrl: string) => {
+				const baseBranch: BaseBranch = createBaseBranch({
+					remoteUrl: remoteUrl,
+					pushRemoteUrl: remoteUrl
+				});
+
+				switch (forgeKey) {
+					case 'GitHub':
+						expect(baseBranch.commitBaseUrl).toBe('https://github.com/org/repo');
+						break;
+					case 'GitLab':
+						expect(baseBranch.commitBaseUrl).toBe('https://gitlab.com/org/repo');
+						break;
+					case 'Bitbucket':
+						expect(baseBranch.commitBaseUrl).toBe('https://bitbucket.org/org/repo');
+						break;
+					case 'AzureDevOps':
+						expect(baseBranch.commitBaseUrl).toBe('https://dev.azure.com/org/project/_git/repo');
+						break;
+					case 'Unknown':
+						expect(baseBranch.commitBaseUrl).toBe('https://otherdomain.com/org/repo');
+						break;
+				}
+			});
+		}
+	);
 
 	describe.each(Object.keys(forgeTestUrls))('parse %s for commit url', (forgeKey: ForgeType) => {
 		test('test collection not empty', () => {
@@ -66,26 +101,37 @@ describe.concurrent('BaseBranch', () => {
 		});
 
 		test.each(forgeTestUrls[forgeKey])('%s', (remoteUrl: string) => {
-			const baseBranch: BaseBranch = plainToInstance(BaseBranch, {
+			const baseBranch: BaseBranch = createBaseBranch({
 				remoteUrl: remoteUrl,
 				pushRemoteUrl: remoteUrl
 			});
 
+			const commitId = 'abcdef';
 			switch (forgeKey) {
 				case 'GitHub':
-					expect(baseBranch.commitBaseUrl).toBe('https://github.com/org/repo');
+					expect(baseBranch.commitUrl(commitId)).toBe(
+						`https://github.com/org/repo/commit/${commitId}`
+					);
 					break;
 				case 'GitLab':
-					expect(baseBranch.commitBaseUrl).toBe('https://gitlab.com/org/repo');
+					expect(baseBranch.commitUrl(commitId)).toBe(
+						`https://gitlab.com/org/repo/-/commit/${commitId}`
+					);
 					break;
 				case 'Bitbucket':
-					expect(baseBranch.commitBaseUrl).toBe('https://bitbucket.org/org/repo');
+					expect(baseBranch.commitUrl(commitId)).toBe(
+						`https://bitbucket.org/org/repo/commits/${commitId}`
+					);
 					break;
 				case 'AzureDevOps':
-					expect(baseBranch.commitBaseUrl).toBe('https://dev.azure.com/org/project/_git/repo');
+					expect(baseBranch.commitUrl(commitId)).toBe(
+						`https://dev.azure.com/org/project/_git/repo/commit/${commitId}`
+					);
 					break;
 				case 'Unknown':
-					expect(baseBranch.commitBaseUrl).toBe('https://otherdomain.com/org/repo');
+					expect(baseBranch.commitUrl(commitId)).toBe(
+						`https://otherdomain.com/org/repo/commit/${commitId}`
+					);
 					break;
 			}
 		});
