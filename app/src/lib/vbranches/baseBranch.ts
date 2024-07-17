@@ -109,7 +109,9 @@ async function getBaseBranch(params: { projectId: string }): Promise<BaseBranch 
 
 export function createBaseBranch(obj: any): BaseBranch {
 	const baseBranch = plainToInstance(BaseBranch, obj) as BaseBranch;
-	baseBranch.afterTransform();
+	if (baseBranch) {
+		baseBranch.afterTransform();
+	}
 	return baseBranch;
 }
 

@@ -42,7 +42,7 @@ describe.concurrent('BaseBranch', () => {
 
 	// The BranchService and get_base_branch_data inside of Rust should validate that this is always supplied but the
 	// previous typescript/svelte implementation supported this not being supplied so this one does as well
-	test("no pushRemoteUrl, doesn't throw", () => {
+	test('no pushRemoteUrl, does not throw', () => {
 		const baseBranch: BaseBranch = createBaseBranch({
 			remoteUrl: 'https://github.com/org/repo.git',
 			pushRemoteUrl: undefined
@@ -135,5 +135,14 @@ describe.concurrent('BaseBranch', () => {
 					break;
 			}
 		});
+	});
+
+	test('null is handled', () => {
+		const baseBranch: BaseBranch = createBaseBranch(null);
+
+		// Validate how it's handled in code
+		expect(baseBranch).toBeFalsy();
+		// Validate it's actually null
+		expect(baseBranch).toBeNull();
 	});
 });

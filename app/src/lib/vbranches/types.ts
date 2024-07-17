@@ -3,7 +3,7 @@ import { splitMessage } from '$lib/utils/commitMessage';
 import { hashCode } from '$lib/utils/string';
 import { isDefined, notNull } from '$lib/utils/typeguards';
 import { ipv4Regex } from '$lib/utils/url';
-import { Expose, Type, Transform, TransformFnParams } from 'class-transformer';
+import { Expose, Type, Transform, type TransformFnParams } from 'class-transformer';
 import GitUrlParse from 'git-url-parse';
 
 export type ChangeType =
@@ -494,7 +494,7 @@ export class BaseBranch {
 				return 'Unknown';
 		}
 	}
-	
+
 	get lastFetched(): Date | undefined {
 		return this.lastFetchedMs ? new Date(this.lastFetchedMs) : undefined;
 	}
